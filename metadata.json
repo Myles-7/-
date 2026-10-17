@@ -1,0 +1,6 @@
+{
+  "name": "PromptVault 本地提示词工坊",
+  "description": "轻量舒适的本地提示词管理工具，支持多维分类与标签检索、变量一键填充、多轮修改版本回溯及外部提示词批量导入导出。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
