@@ -36,6 +36,25 @@ export interface PromptSnippet {
   content: string;
 }
 
+export interface PromptChainStep {
+  id: string;
+  title: string;
+  promptId?: string;
+  customContent?: string;
+  handoffVarName?: string;
+  stepNote?: string;
+}
+
+export interface PromptChain {
+  id: string;
+  title: string;
+  description: string;
+  category: string;
+  steps: PromptChainStep[];
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface PromptItem {
   id: string;
   title: string;
@@ -56,7 +75,7 @@ export interface PromptItem {
   variablePresets?: VariablePreset[];
 }
 
-export type LibraryView = 'all' | 'favorites' | 'recent';
+export type LibraryView = 'all' | 'favorites' | 'recent' | 'chains';
 
 export type SortField = 'updatedAt' | 'usageCount' | 'createdAt' | 'title';
 

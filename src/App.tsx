@@ -28,12 +28,14 @@ import type {
   ImportedPromptDraft,
   LayoutMode,
   LibraryView,
+  PromptChain,
   PromptItem,
   PromptSnippet,
   SortField,
 } from './types/prompt';
 import {
   DEFAULT_CATEGORIES,
+  DEFAULT_PROMPT_CHAINS,
   DEFAULT_SNIPPETS,
   SEED_PROMPTS,
 } from './data/seedPrompts';
@@ -45,16 +47,19 @@ import {
   duplicatePromptItem,
   tokenizeTemplateSegments,
   normalizeTags,
+  formatCompactPromptPreview,
 } from './utils/promptLogic';
 import { Sidebar } from './components/Sidebar';
 import { PromptDetailWorkbench } from './components/PromptDetailWorkbench';
 import { PromptEditorModal } from './components/PromptEditorModal';
 import { ImportExportModal } from './components/ImportExportModal';
+import { PromptChainCanvasWorkspace } from './components/PromptChainCanvasWorkspace';
 
 const STORAGE_KEYS = {
   PROMPTS: 'promptvault_prompts_v3',
   CATEGORIES: 'promptvault_categories_v3',
   SNIPPETS: 'promptvault_snippets_v3',
+  CHAINS: 'promptvault_chains_v3',
   LAYOUT: 'promptvault_layout_v3',
   VAR_INPUTS: 'promptvault_var_inputs_v3',
 };
@@ -107,6 +112,19 @@ export default function App() {
       // ignore
     }
     return DEFAULT_SNIPPETS;
+  });
+
+  const [chains, setChains] = useState<PromptChain[]>(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEYS.CHAINS);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {
+      // ignore
+    }
+    return DEFAULT_PROMPT_CHAINS;
   });
 
   const [layoutMode, setLayoutMode] = useState<LayoutMode>(() => {
@@ -172,6 +190,12 @@ export default function App() {
     PromptItem[] | null
   >(null);
 
+  // Card content full-text expansion states (per-card and global toggle)
+  const [expandAllCards, setExpandAllCards] = useState(false);
+  const [expandedCardIds, setExpandedCardIds] = useState<
+    Record<string, boolean>
+  >({});
+
   const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   // Sync with localStorage
@@ -198,6 +222,14 @@ export default function App() {
       // ignore
     }
   }, [snippets]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEYS.CHAINS, JSON.stringify(chains));
+    } catch {
+      // ignore
+    }
+  }, [chains]);
 
   useEffect(() => {
     try {
@@ -377,8 +409,26 @@ export default function App() {
     catId: string | 'all',
     subId: string | 'all' = 'all'
   ) => {
+    if (activeView === 'chains') {
+      setActiveView('all');
+    }
     setActiveCategoryId(catId);
     setActiveSubCategoryId(subId);
+  };
+
+  const handleSaveChain = (updatedChain: PromptChain) => {
+    setChains((prev) =>
+      prev.map((c) => (c.id === updatedChain.id ? updatedChain : c))
+    );
+  };
+
+  const handleCreateChain = (newChain: PromptChain) => {
+    setChains((prev) => [...prev, newChain]);
+  };
+
+  const handleDeleteChain = (chainId: string) => {
+    setChains((prev) => prev.filter((c) => c.id !== chainId));
+    showToast('已删除任务流');
   };
 
   const handleToggleTag = (tag: string) => {
@@ -1151,6 +1201,20 @@ export default function App() {
             最近使用
           </a>
           <a
+            href="#chains"
+            onClick={(e) => {
+              e.preventDefault();
+              setActiveView('chains');
+            }}
+            className={`hover:text-slate-900 transition-colors whitespace-nowrap shrink-0 ${
+              activeView === 'chains'
+                ? 'text-blue-600 font-semibold underline underline-offset-4'
+                : ''
+            }`}
+          >
+            场景任务流
+          </a>
+          <a
             href="#import"
             onClick={(e) => {
               e.preventDefault();
@@ -1177,28 +1241,33 @@ export default function App() {
 
       {/* Main Workspace Container */}
       <div className="flex-1 flex min-h-0 relative">
-        {/* Desktop Sidebar: Vivid Two-Level Category Tree + Rename/Reorder + Tag Filter */}
-        <div className="hidden lg:block h-full">
-          <Sidebar
-            prompts={prompts}
-            categories={categories}
-            activeCategoryId={activeCategoryId}
-            activeSubCategoryId={activeSubCategoryId}
-            selectedTags={selectedTags}
-            allTags={allTags}
-            onSelectCategory={handleSelectCategory}
-            onToggleTag={handleToggleTag}
-            onClearTags={() => setSelectedTags([])}
-            onAddCategory={handleAddCategory}
-            onAddSubCategory={handleAddSubCategory}
-            onRenameCategory={handleRenameCategory}
-            onMoveCategory={handleMoveCategory}
-            onRenameSubCategory={handleRenameSubCategory}
-            onMoveSubCategory={handleMoveSubCategory}
-            onDeleteCategory={handleDeleteCategory}
-            onDeleteSubCategory={handleDeleteSubCategory}
-          />
-        </div>
+        {/* Desktop Sidebar: Vivid Two-Level Category Tree + Rename/Reorder + Tag Filter (Hidden in Canvas Studio so Canvas has its own dedicated Node Palette & full width) */}
+        {activeView !== 'chains' && (
+          <div className="hidden lg:block h-full">
+            <Sidebar
+              prompts={prompts}
+              categories={categories}
+              activeView={activeView}
+              chainsCount={chains.length}
+              activeCategoryId={activeCategoryId}
+              activeSubCategoryId={activeSubCategoryId}
+              selectedTags={selectedTags}
+              allTags={allTags}
+              onSelectCategory={handleSelectCategory}
+              onSelectChainsView={() => setActiveView('chains')}
+              onToggleTag={handleToggleTag}
+              onClearTags={() => setSelectedTags([])}
+              onAddCategory={handleAddCategory}
+              onAddSubCategory={handleAddSubCategory}
+              onRenameCategory={handleRenameCategory}
+              onMoveCategory={handleMoveCategory}
+              onRenameSubCategory={handleRenameSubCategory}
+              onMoveSubCategory={handleMoveSubCategory}
+              onDeleteCategory={handleDeleteCategory}
+              onDeleteSubCategory={handleDeleteSubCategory}
+            />
+          </div>
+        )}
 
         {/* Mobile Sidebar Drawer */}
         {mobileSidebarOpen && (
@@ -1211,12 +1280,18 @@ export default function App() {
               <Sidebar
                 prompts={prompts}
                 categories={categories}
+                activeView={activeView}
+                chainsCount={chains.length}
                 activeCategoryId={activeCategoryId}
                 activeSubCategoryId={activeSubCategoryId}
                 selectedTags={selectedTags}
                 allTags={allTags}
                 onSelectCategory={(cat, sub) => {
                   handleSelectCategory(cat, sub);
+                  setMobileSidebarOpen(false);
+                }}
+                onSelectChainsView={() => {
+                  setActiveView('chains');
                   setMobileSidebarOpen(false);
                 }}
                 onToggleTag={handleToggleTag}
@@ -1234,8 +1309,24 @@ export default function App() {
           </div>
         )}
 
-        {/* Center Content Column: Search + Vivid Sub-Category Bar + Prompts Grid/List */}
-        <main className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
+        {activeView === 'chains' ? (
+          <PromptChainCanvasWorkspace
+            chains={chains}
+            prompts={prompts}
+            categories={categories}
+            snippets={snippets}
+            onSaveChain={handleSaveChain}
+            onCreateChain={handleCreateChain}
+            onDeleteChain={handleDeleteChain}
+            onAddSnippet={handleAddSnippet}
+            onDeleteSnippet={handleDeleteSnippet}
+            onShowToast={(msg) => showToast(msg)}
+            onBackToLibrary={() => setActiveView('all')}
+          />
+        ) : (
+          <>
+            {/* Center Content Column: Search + Vivid Sub-Category Bar + Prompts Grid/List */}
+            <main className="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
           {/* Streamlined Search & Sub-Category Bar */}
           <div className="px-4 py-3.5 lg:px-6 bg-white border-b border-slate-200/80 space-y-3">
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
@@ -1261,14 +1352,32 @@ export default function App() {
                     <X className="w-3.5 h-3.5" />
                   </button>
                 ) : (
-                  <kbd className="hidden sm:inline-block absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-mono text-slate-400 bg-white border border-slate-200 rounded px-1.5 py-0.5 pointer-events-none">
+                  <kbd className="hidden xl:inline-block absolute right-3 top-1/2 -translate-y-1/2 text-[11px] font-mono text-slate-400 bg-white border border-slate-200 rounded px-1.5 py-0.5 pointer-events-none">
                     ⌘K
                   </kbd>
                 )}
               </div>
 
-              {/* Right Controls: Batch Mode + Sort + Layout Mode */}
-              <div className="flex items-center justify-between sm:justify-end gap-2 shrink-0">
+              {/* Right Controls: Full-Text Toggle + Batch Mode + Sort + Layout Mode */}
+              <div className="flex items-center justify-between sm:justify-end gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setExpandAllCards((v) => {
+                      const next = !v;
+                      if (!next) setExpandedCardIds({});
+                      return next;
+                    });
+                  }}
+                  className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap ${
+                    expandAllCards
+                      ? 'bg-slate-900 text-white border-slate-900'
+                      : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  <span>{expandAllCards ? '收起全部正文' : '展开全部正文'}</span>
+                </button>
+
                 <button
                   type="button"
                   onClick={() => {
@@ -1288,13 +1397,12 @@ export default function App() {
                   <span>{isBatchMode ? '退出批量' : '批量整理'}</span>
                 </button>
 
-                <div className="flex items-center gap-1.5">
-                  <SlidersHorizontal className="w-3.5 h-3.5 text-slate-400 hidden sm:inline" />
+                <div className="flex items-center gap-1">
                   <select
                     value={sortBy}
                     onChange={(e) => setSortBy(e.target.value as SortField)}
                     aria-label="排序方式"
-                    className="text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-blue-600"
+                    className="text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 focus:outline-none focus:border-blue-600"
                   >
                     <option value="updatedAt">最近修改</option>
                     <option value="usageCount">高频使用</option>
@@ -1522,7 +1630,12 @@ export default function App() {
                     const subCatName = item.subCategoryId
                       ? subCategoriesMap[item.subCategoryId]
                       : undefined;
-                    const segments = tokenizeTemplateSegments(item.content);
+                    const isCardExpanded =
+                      expandAllCards || Boolean(expandedCardIds[item.id]);
+                    const displayContent = isCardExpanded
+                      ? item.content
+                      : formatCompactPromptPreview(item.content);
+                    const segments = tokenizeTemplateSegments(displayContent);
                     const presetCount = item.variablePresets?.length || 0;
 
                     return (
@@ -1633,22 +1746,61 @@ export default function App() {
                             </p>
                           )}
 
-                          {/* Row 3: Clean Unboxed Template Preview with Highlighted {{Variables}} */}
-                          <div className="mt-3 pt-3 border-t border-slate-100 text-[13px] text-slate-600 font-sans leading-[1.65] line-clamp-3 whitespace-pre-wrap">
-                            {segments.map((seg, idx) =>
-                              seg.type === 'text' ? (
-                                <React.Fragment key={idx}>
-                                  {seg.value}
-                                </React.Fragment>
-                              ) : (
-                                <span
-                                  key={idx}
-                                  className="font-mono text-xs text-blue-600 bg-blue-50/80 px-1 py-0.5 rounded-xs font-medium"
-                                >
-                                  {seg.value}
-                                </span>
-                              )
-                            )}
+                          {/* Row 3: High-Capacity Structured Prompt Content Reader (6 lines normalized or Full Text) */}
+                          <div className="mt-3 rounded-xl bg-slate-50/90 border border-slate-200/80 p-3.5 transition-colors group-hover:bg-slate-50 group-hover:border-slate-300/80">
+                            <div
+                              className={`text-[13px] text-slate-700 font-sans leading-[1.68] whitespace-pre-wrap break-words ${
+                                isCardExpanded ? '' : 'line-clamp-6'
+                              }`}
+                            >
+                              {segments.map((seg, idx) =>
+                                seg.type === 'text' ? (
+                                  <React.Fragment key={idx}>
+                                    {seg.value}
+                                  </React.Fragment>
+                                ) : (
+                                  <span
+                                    key={idx}
+                                    className="inline-block font-mono text-xs text-blue-700 bg-blue-100/75 border border-blue-200/80 px-1.5 py-0 rounded font-medium mx-0.5"
+                                  >
+                                    {seg.value}
+                                    {seg.options && seg.options.length > 0
+                                      ? ` (${seg.options.length}选1)`
+                                      : ''}
+                                  </span>
+                                )
+                              )}
+                            </div>
+
+                            {/* Content Box Footer: Line/Char Metric + One-Click Expand/Collapse Full Prompt */}
+                            <div className="mt-2.5 pt-2 border-t border-slate-200/60 flex items-center justify-between gap-2 text-[11px]">
+                              <span className="font-mono tabular-nums text-slate-500 whitespace-nowrap">
+                                共 {item.content.split('\n').length} 行 · {item.content.length} 字
+                                {vars.length > 0 ? ` · 含 ${vars.length} 个变量` : ''}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  if (expandAllCards) {
+                                    setExpandAllCards(false);
+                                    const next: Record<string, boolean> = {};
+                                    visiblePrompts.forEach((p) => {
+                                      if (p.id !== item.id) next[p.id] = true;
+                                    });
+                                    setExpandedCardIds(next);
+                                  } else {
+                                    setExpandedCardIds((prev) => ({
+                                      ...prev,
+                                      [item.id]: !prev[item.id],
+                                    }));
+                                  }
+                                }}
+                                className="text-blue-600 hover:text-blue-800 font-semibold whitespace-nowrap shrink-0"
+                              >
+                                {isCardExpanded ? '收起全文 ▲' : '展开全文 ▼'}
+                              </button>
+                            </div>
                           </div>
                         </div>
 
@@ -1752,6 +1904,11 @@ export default function App() {
                       ? subCategoriesMap[item.subCategoryId]
                       : undefined;
                     const vars = extractVariables(item.content);
+                    const isRowExpanded =
+                      expandAllCards || Boolean(expandedCardIds[item.id]);
+                    const compactContent = formatCompactPromptPreview(
+                      item.content
+                    );
 
                     return (
                       <div
@@ -1763,7 +1920,7 @@ export default function App() {
                             setSelectedPromptId(item.id);
                           }
                         }}
-                        className={`px-4 py-3 flex items-center justify-between gap-4 cursor-pointer transition-colors ${
+                        className={`px-4 py-3.5 flex items-start justify-between gap-4 cursor-pointer transition-colors ${
                           isBatchMode && isBatchChecked
                             ? 'bg-blue-50/70'
                             : isSelected
@@ -1801,16 +1958,63 @@ export default function App() {
                                 · {vars.length}变量
                               </span>
                             )}
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (expandAllCards) {
+                                  setExpandAllCards(false);
+                                  setExpandedCardIds({ [item.id]: false });
+                                } else {
+                                  setExpandedCardIds((prev) => ({
+                                    ...prev,
+                                    [item.id]: !prev[item.id],
+                                  }));
+                                }
+                              }}
+                              className="text-[11px] text-blue-600 hover:underline font-medium shrink-0 ml-1"
+                            >
+                              {isRowExpanded ? '收起正文 ▴' : '展开正文 ▾'}
+                            </button>
                           </div>
                           <div className="text-xs text-slate-500 truncate mt-0.5">
                             <span className="text-slate-700 font-medium">
                               {catName}
                               {subCatName ? ` / ${subCatName}` : ''}
                             </span>
-                            <span className="mx-1.5">·</span>
-                            <span>
-                              {item.description || item.content.slice(0, 60)}
-                            </span>
+                            {item.description && (
+                              <>
+                                <span className="mx-1.5">·</span>
+                                <span>{item.description}</span>
+                              </>
+                            )}
+                          </div>
+                          <div className="mt-1.5 p-2.5 rounded-lg bg-slate-50 border border-slate-200/70">
+                            <div
+                              className={`text-xs text-slate-700 leading-relaxed whitespace-pre-wrap break-words ${
+                                isRowExpanded ? '' : 'line-clamp-3'
+                              }`}
+                            >
+                              {tokenizeTemplateSegments(
+                                isRowExpanded ? item.content : compactContent
+                              ).map((seg, idx) =>
+                                seg.type === 'text' ? (
+                                  <React.Fragment key={idx}>
+                                    {seg.value}
+                                  </React.Fragment>
+                                ) : (
+                                  <span
+                                    key={idx}
+                                    className="inline-block font-mono text-[11px] text-blue-700 bg-blue-100/75 border border-blue-200/80 px-1 py-0 rounded font-medium mx-0.5"
+                                  >
+                                    {seg.value}
+                                    {seg.options && seg.options.length > 0
+                                      ? ` (${seg.options.length}选1)`
+                                      : ''}
+                                  </span>
+                                )
+                              )}
+                            </div>
                           </div>
                         </div>
 
@@ -1977,6 +2181,8 @@ export default function App() {
               onSaveQuickIteration={handleSaveQuickIteration}
             />
           </div>
+        )}
+          </>
         )}
       </div>
 

@@ -2,11 +2,308 @@ import type {
   PromptItem,
   PromptVersion,
   PromptVariableDescriptor,
+  PromptChain,
+  PromptChainStep,
   FilterOptions,
   DiffLine,
   ImportedPromptDraft,
   ParsedImportResult,
 } from '../types/prompt.ts';
+
+/**
+ * Resolves the effective template content for a workflow chain step.
+ * Uses the linked PromptItem's latest content if `promptId` exists, otherwise falls back to `customContent`.
+ */
+export function resolveChainStepContent(
+  step: PromptChainStep,
+  promptsMap: Record<string, PromptItem>
+): string {
+  if (step.promptId && promptsMap[step.promptId]) {
+    return promptsMap[step.promptId].content;
+  }
+  return step.customContent || '';
+}
+
+/**
+ * Analyzes all steps in a PromptChain to identify per-step variables and shared cross-step variables.
+ */
+export function analyzeChainVariables(
+  chain: PromptChain,
+  promptsMap: Record<string, PromptItem>
+): {
+  stepDescriptors: Record<string, PromptVariableDescriptor[]>;
+  sharedVarNames: string[];
+} {
+  const stepDescriptors: Record<string, PromptVariableDescriptor[]> = {};
+  const occurrenceCount = new Map<string, number>();
+
+  for (const step of chain.steps) {
+    const content = resolveChainStepContent(step, promptsMap);
+    const descs = extractVariableDescriptors(content);
+    stepDescriptors[step.id] = descs;
+    for (const d of descs) {
+      occurrenceCount.set(d.name, (occurrenceCount.get(d.name) || 0) + 1);
+    }
+  }
+
+  const sharedVarNames = Array.from(occurrenceCount.entries())
+    .filter(([, count]) => count >= 2)
+    .map(([name]) => name);
+
+  return { stepDescriptors, sharedVarNames };
+}
+
+/**
+ * Assembles the final prompt for a specific step in a PromptChain, automatically wiring any
+ * upstream step's output into its `handoffVarName` (and immediate previous step into `上一步产出`).
+ */
+export function assembleChainStepPrompt(
+  chain: PromptChain,
+  stepIndex: number,
+  promptsMap: Record<string, PromptItem>,
+  variableValues: Record<string, string>,
+  stepOutputs: Record<string, string>
+): {
+  assembled: string;
+  effectiveValues: Record<string, string>;
+  handoffFromPrev?: { prevStepTitle: string; targetVarName: string; hasOutput: boolean };
+} {
+  const step = chain.steps[stepIndex];
+  if (!step) {
+    return { assembled: '', effectiveValues: variableValues };
+  }
+
+  const effectiveValues: Record<string, string> = { ...variableValues };
+  let handoffFromPrev:
+    | { prevStepTitle: string; targetVarName: string; hasOutput: boolean }
+    | undefined;
+
+  // Wire all completed upstream step handoff outputs (Steps 0 .. stepIndex - 1)
+  for (let i = 0; i < stepIndex; i++) {
+    const upstreamStep = chain.steps[i];
+    if (!upstreamStep) continue;
+    const upstreamOutput = (stepOutputs[upstreamStep.id] || '').trim();
+    if (upstreamStep.handoffVarName && upstreamOutput && !effectiveValues[upstreamStep.handoffVarName]?.trim()) {
+      effectiveValues[upstreamStep.handoffVarName] = upstreamOutput;
+    }
+  }
+
+  if (stepIndex > 0) {
+    const prevStep = chain.steps[stepIndex - 1];
+    const prevOutput = (stepOutputs[prevStep.id] || '').trim();
+    if (prevStep.handoffVarName) {
+      handoffFromPrev = {
+        prevStepTitle: prevStep.title,
+        targetVarName: prevStep.handoffVarName,
+        hasOutput: Boolean(prevOutput),
+      };
+    }
+    if (prevOutput && !effectiveValues['上一步产出']?.trim()) {
+      effectiveValues['上一步产出'] = prevOutput;
+    }
+  }
+
+  const rawContent = resolveChainStepContent(step, promptsMap);
+  const assembled = interpolatePrompt(rawContent, effectiveValues, true);
+
+  return { assembled, effectiveValues, handoffFromPrev };
+}
+
+/**
+ * Exports a PromptChain and its current compiled prompts / recorded outputs as a structured Markdown SOP document.
+ */
+export function exportChainAsMarkdown(
+  chain: PromptChain,
+  promptsMap: Record<string, PromptItem>,
+  variableValues: Record<string, string>,
+  stepOutputs: Record<string, string>
+): string {
+  const lines: string[] = [
+    `# ${chain.title}`,
+    '',
+    `> **场景说明**：${chain.description || '多步提示词串联工作流'}`,
+    `> **所属领域**：${chain.category} · **步骤总数**：${chain.steps.length} 步`,
+    '',
+  ];
+
+  chain.steps.forEach((step, idx) => {
+    const { assembled } = assembleChainStepPrompt(
+      chain,
+      idx,
+      promptsMap,
+      variableValues,
+      stepOutputs
+    );
+    const output = (stepOutputs[step.id] || '').trim();
+    lines.push(`## Step ${String(idx + 1).padStart(2, '0')}. ${step.title}`);
+    if (step.stepNote) {
+      lines.push(`- **执行说明**：${step.stepNote}`);
+    }
+    if (step.handoffVarName) {
+      lines.push(`- **产出传递变量**：\`{{${step.handoffVarName}}}\``);
+    }
+    lines.push('');
+    lines.push('### 提示词内容');
+    lines.push('```markdown');
+    lines.push(assembled);
+    lines.push('```');
+    if (output) {
+      lines.push('');
+      lines.push('### 本步执行产出');
+      lines.push(output);
+    }
+    lines.push('');
+  });
+
+  return lines.join('\n');
+}
+
+/**
+ * Automatically wires an ordered list of PromptItems from the library into a connected PromptChain.
+ * Downstream steps automatically receive a reference to the previous step's `handoffVarName`
+ * so the user gets an out-of-the-box working relay without manual variable syntax configuration.
+ */
+export function buildChainFromPromptItems(
+  selectedPrompts: PromptItem[],
+  options: {
+    id?: string;
+    title: string;
+    description?: string;
+    category?: string;
+    nowIso?: string;
+  }
+): PromptChain {
+  const now = options.nowIso || new Date().toISOString();
+  const steps: PromptChainStep[] = selectedPrompts.map((p, idx) => {
+    const isLast = idx === selectedPrompts.length - 1;
+    const handoffVarName = isLast ? undefined : `阶段0${idx + 1}_${p.title.slice(0, 6).replace(/\s+/g, '')}产出`;
+    const prevPrompt = idx > 0 ? selectedPrompts[idx - 1] : undefined;
+    const prevHandoffVar =
+      idx > 0
+        ? `阶段0${idx}_${prevPrompt!.title.slice(0, 6).replace(/\s+/g, '')}产出`
+        : undefined;
+
+    // If this is step >= 1, append the upstream handoff block so it automatically relays
+    const customContent = prevHandoffVar
+      ? `${p.content}\n\n【上游传入 · ${prevHandoffVar}】：\n{{${prevHandoffVar}}}`
+      : undefined;
+
+    return {
+      id: `step-${Date.now()}-${idx + 1}`,
+      title: p.title,
+      promptId: idx === 0 ? p.id : undefined,
+      customContent,
+      handoffVarName,
+      stepNote:
+        idx === 0
+          ? `基于词库《${p.title}》作为起点，产出结果将自动注入下一步。`
+          : `承接上一步《${prevHandoffVar}》并结合《${p.title}》继续深入。`,
+    };
+  });
+
+  return {
+    id: options.id || `chain-${Date.now()}`,
+    title: options.title.trim() || '词库组合串联任务流',
+    description:
+      options.description?.trim() ||
+      `由 ${selectedPrompts.length} 个词库模板自动串联生成，支持跨步变量共享与产出接力。`,
+    category: options.category || selectedPrompts[0]?.category || '编程与架构',
+    steps,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
+/**
+ * Generates deterministic sample variable values and step outputs for a full-chain interactive demo playthrough.
+ */
+export function simulateChainRunState(
+  chain: PromptChain,
+  promptsMap: Record<string, PromptItem>,
+  sampleStepOutputsDict: Record<string, string> = {}
+): {
+  varValues: Record<string, string>;
+  stepOutputs: Record<string, string>;
+  completedSteps: Record<string, boolean>;
+} {
+  const varValues: Record<string, string> = {};
+  const stepOutputs: Record<string, string> = {};
+  const completedSteps: Record<string, boolean> = {};
+
+  const sampleInputFallbacks: Record<string, string> = {
+    技术栈与架构: 'React 19 + TypeScript + Tailwind CSS',
+    所属系统模块: '场景任务流画布工作台 (Workflow Studio)',
+    所属模块: '场景任务流画布工作台 (Workflow Studio)',
+    需求描述: '支持可视化节点串联、上游产出自动注入下游变量、一键全流程模拟演示与词库节点速插。',
+    审查侧重点: '空状态与边界异常回滚',
+    发布版本标识: 'v2.4.0 场景任务流正式版',
+    研究赛道与主题: 'AI 提示词工程与多步 Agent 编排工作台',
+    核心技术或产品方向: '轻量化本地优先 (Local-First) 提示词串联画布',
+    核心素材内容: '传统单次 Prompt 难以应对复杂长链路任务，而重型节点编程工具学习成本过高。',
+    对比评估维度: '上手门槛、跨步变量复用率、SOP 沉淀效率',
+    汇报受众: '产品与研发负责人',
+    文章核心主题: '为什么复杂 AI 任务需要从「单点提示词」升级为「多步场景任务流」',
+    目标读者画像: '高频使用 AI 辅助研发、调研与写作的专业创作者',
+    核心论点素材: '拆解单一职责节点 + 显式检验阶段产出 + 上下游变量自动接力',
+    文风偏好: '克制锋利的工程实践派',
+    润色强度: '深度去套话与长短句节奏重塑',
+    目标主题: '核心业务模块重构与性能优化',
+    原始背景描述: '现有模块耦合度较高，需拆分为独立纯函数层与可视化交互层。',
+    核心任务目标: '构建高内聚、易上手的多步提示词串联画布',
+  };
+
+  const handoffNames = new Set(
+    chain.steps.map((s) => s.handoffVarName?.trim()).filter(Boolean) as string[]
+  );
+
+  for (let idx = 0; idx < chain.steps.length; idx++) {
+    const step = chain.steps[idx];
+    const content = resolveChainStepContent(step, promptsMap);
+    const descs = extractVariableDescriptors(content);
+
+    for (const d of descs) {
+      if (handoffNames.has(d.name)) continue;
+      if (!varValues[d.name]) {
+        if (d.options && d.options.length > 0) {
+          varValues[d.name] = d.options[0];
+        } else {
+          varValues[d.name] =
+            sampleInputFallbacks[d.name] || `示例${d.name}参数内容`;
+        }
+      }
+    }
+
+    const handoffKey = step.handoffVarName || '';
+    const presetSample = handoffKey ? sampleStepOutputsDict[handoffKey] : undefined;
+    stepOutputs[step.id] =
+      presetSample ||
+      `【Step 0${idx + 1} · ${step.title} 阶段结论】\n1. 已完成本阶段核心目标分析与结构化拆解；\n2. 关键输出已就绪，自动作为变量 {{${
+        handoffKey || '上一步产出'
+      }}} 传递至下一节点。`;
+    completedSteps[step.id] = true;
+  }
+
+  return { varValues, stepOutputs, completedSteps };
+}
+
+/**
+ * Normalizes prompt content for high-density card previews by stripping standalone code fence lines
+ * and collapsing consecutive blank lines so multi-line previews never waste vertical lines on empty gaps.
+ */
+export function formatCompactPromptPreview(content: string): string {
+  if (!content) return '';
+  return content
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*```[a-zA-Z0-9_-]*\s*$/.test(line))
+    .map((line) => line.trimEnd())
+    .filter((line, idx, arr) => {
+      // Remove empty lines altogether so every preview line has actual content
+      if (line.trim() === '') return false;
+      return idx >= 0 && arr.length > 0;
+    })
+    .join('\n')
+    .trim();
+}
 
 /**
  * Parses an inner `{{...}}` token supporting both standard `{{变量名}}`

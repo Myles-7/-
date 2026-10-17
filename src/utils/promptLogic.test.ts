@@ -12,8 +12,15 @@ import {
   parseExternalPrompts,
   tokenizeTemplateSegments,
   duplicatePromptItem,
+  resolveChainStepContent,
+  analyzeChainVariables,
+  assembleChainStepPrompt,
+  exportChainAsMarkdown,
+  buildChainFromPromptItems,
+  simulateChainRunState,
+  formatCompactPromptPreview,
 } from './promptLogic.ts';
-import type { PromptItem } from '../types/prompt.ts';
+import type { PromptChain, PromptItem } from '../types/prompt.ts';
 
 test('extractVariables and extractVariableDescriptors support standard and enum option variables', () => {
   const tpl =
@@ -252,3 +259,125 @@ test('parseExternalPrompts supports JSON, GitHub CSV ("act","prompt"), and Markd
   assert.equal(diff.filter((d) => d.type === 'removed').length, 1);
   assert.equal(diff.filter((d) => d.type === 'added').length, 1);
 });
+
+test('PromptChain workflow: analyzeChainVariables, multi-step upstream handoff, and Markdown export', () => {
+  const samplePrompt: PromptItem = {
+    id: 'p-prd',
+    title: '需求拆解',
+    description: '拆解 PRD',
+    content: '模块：{{系统模块}}，需求：{{原始需求}}',
+    categoryId: 'cat-work',
+    tags: [],
+    isFavorite: false,
+    usageCount: 0,
+    createdAt: '2026-10-01T00:00:00Z',
+    updatedAt: '2026-10-01T00:00:00Z',
+    currentVersion: 1,
+    versions: [],
+  };
+
+  const promptsMap: Record<string, PromptItem> = {
+    'p-prd': samplePrompt,
+  };
+
+  const sampleChain: PromptChain = {
+    id: 'chain-1',
+    title: '研发交付三步流',
+    description: '测试工作流',
+    category: '编程与架构',
+    createdAt: '2026-10-01T00:00:00Z',
+    updatedAt: '2026-10-01T00:00:00Z',
+    steps: [
+      {
+        id: 's1',
+        title: '第一步：需求拆解',
+        promptId: 'p-prd',
+        handoffVarName: '需求清单',
+      },
+      {
+        id: 's2',
+        title: '第二步：接口设计',
+        customContent: '模块：{{系统模块}}，技术栈：{{技术栈:React|Node}}，依据：{{需求清单}}',
+        handoffVarName: '接口方案',
+      },
+      {
+        id: 's3',
+        title: '第三步：上线总结',
+        customContent: '汇总模块 {{系统模块}} 的需求 {{需求清单}} 与接口 {{接口方案}}',
+      },
+    ],
+  };
+
+  assert.equal(
+    resolveChainStepContent(sampleChain.steps[0], promptsMap),
+    '模块：{{系统模块}}，需求：{{原始需求}}'
+  );
+
+  const analysis = analyzeChainVariables(sampleChain, promptsMap);
+  assert.deepEqual(analysis.sharedVarNames, ['系统模块', '需求清单']);
+  assert.equal(analysis.stepDescriptors['s2'].length, 3);
+
+  const step3Result = assembleChainStepPrompt(
+    sampleChain,
+    2,
+    promptsMap,
+    { 系统模块: '订单中心' },
+    { s1: '支持拆单与退款', s2: 'POST /api/orders/split' }
+  );
+
+  assert.equal(
+    step3Result.assembled,
+    '汇总模块 订单中心 的需求 支持拆单与退款 与接口 POST /api/orders/split'
+  );
+  assert.equal(step3Result.handoffFromPrev?.targetVarName, '接口方案');
+  assert.equal(step3Result.handoffFromPrev?.hasOutput, true);
+
+  const md = exportChainAsMarkdown(
+    sampleChain,
+    promptsMap,
+    { 系统模块: '订单中心' },
+    { s1: '支持拆单与退款' }
+  );
+  assert.ok(md.includes('# 研发交付三步流'));
+  assert.ok(md.includes('## Step 01. 第一步：需求拆解'));
+  assert.ok(md.includes('支持拆单与退款'));
+
+  // Test automatic chain builder from selected prompt items
+  const builtChain = buildChainFromPromptItems(
+    [
+      samplePrompt,
+      {
+        ...samplePrompt,
+        id: 'p-review',
+        title: '代码审查',
+        content: '请审查模块 {{系统模块}} 的实现质量。',
+      },
+    ],
+    {
+      id: 'chain-built',
+      title: '自动串联测试流',
+      category: '编程与架构',
+      nowIso: '2026-10-17T00:00:00Z',
+    }
+  );
+  assert.equal(builtChain.steps.length, 2);
+  assert.equal(builtChain.steps[0].handoffVarName, '阶段01_需求拆解产出');
+  assert.ok(builtChain.steps[1].customContent?.includes('{{阶段01_需求拆解产出}}'));
+
+  // Test full-chain simulation helper
+  const sim = simulateChainRunState(sampleChain, promptsMap, {
+    需求清单: '模拟需求拆解结果',
+  });
+  assert.equal(sim.completedSteps['s1'], true);
+  assert.equal(sim.completedSteps['s3'], true);
+  assert.equal(sim.stepOutputs['s1'], '模拟需求拆解结果');
+  assert.equal(sim.varValues['技术栈'], 'React');
+
+  // Test compact preview normalization (strips empty lines and standalone fences)
+  const rawSql = '数据库环境：{{数据库类型}}\n\n\n```sql\n{{现有SQL}}\n```\n\n【优化目标】\n1. 索引诊断';
+  assert.equal(
+    formatCompactPromptPreview(rawSql),
+    '数据库环境：{{数据库类型}}\n{{现有SQL}}\n【优化目标】\n1. 索引诊断'
+  );
+});
+

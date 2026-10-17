@@ -284,7 +284,7 @@ export const PromptDetailWorkbench: React.FC<PromptDetailWorkbenchProps> = ({
   return (
     <section
       aria-label="提示词详情与多轮调试工作台"
-      className="w-full lg:w-[480px] xl:w-[540px] shrink-0 bg-white border-l border-slate-200 flex flex-col h-full"
+      className="w-full lg:w-[420px] xl:w-[460px] shrink-0 bg-white border-l border-slate-200 flex flex-col h-full"
     >
       {/* Top Header */}
       <div className="p-5 border-b border-slate-200 flex items-start justify-between gap-4">
@@ -519,7 +519,74 @@ export const PromptDetailWorkbench: React.FC<PromptDetailWorkbenchProps> = ({
               </form>
             ) : (
               <>
-                {/* Dynamic Variables Fill-in Section with Multi-Presets & Enum Option Selectors */}
+                {/* 1. Primary Full-Text Prompt Reader & Live Interpolated Preview (Placed at the very top for immediate reading) */}
+                <div className="rounded-xl border border-slate-200/90 bg-slate-50/70 overflow-hidden shadow-2xs">
+                  <div className="px-3.5 py-2.5 bg-slate-100/80 border-b border-slate-200/80 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-slate-800">
+                        提示词全文与实时合成预览
+                      </span>
+                      {variables.length > 0 && (
+                        <span className="text-[11px] font-mono tabular-nums text-blue-700 bg-blue-50 border border-blue-200/70 px-1.5 py-0.5 rounded">
+                          已填 {variables.length - unfilledCount}/{variables.length} 变量
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-slate-500 font-mono tabular-nums">
+                        {assembledPrompt.split('\n').length} 行 · {assembledPrompt.length} 字
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => handleCopy(assembledPrompt, 'assembled')}
+                        className={`px-2.5 py-1 rounded-md text-xs font-semibold transition-colors flex items-center gap-1 whitespace-nowrap ${
+                          copiedState === 'assembled'
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-slate-900 text-white hover:bg-slate-800'
+                        }`}
+                      >
+                        {copiedState === 'assembled' ? (
+                          <>
+                            <Check className="w-3 h-3" />
+                            <span>已复制全文</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3" />
+                            <span>复制全文</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+
+                  <div
+                    data-testid="workbench-full-prompt-reader"
+                    className="p-4 text-[14px] leading-[1.72] text-slate-800 whitespace-pre-wrap break-words font-sans select-all bg-white/90"
+                  >
+                    {previewSegments.map((seg, idx) =>
+                      seg.type === 'text' ? (
+                        <React.Fragment key={idx}>{seg.value}</React.Fragment>
+                      ) : seg.filled ? (
+                        <span
+                          key={idx}
+                          className="text-blue-700 font-semibold bg-blue-50/90 px-1 py-0.5 rounded underline decoration-blue-300 decoration-dashed underline-offset-4"
+                        >
+                          {seg.value}
+                        </span>
+                      ) : (
+                        <span
+                          key={idx}
+                          className="font-mono text-amber-800 bg-amber-50 border border-amber-200/80 px-1.5 py-0.5 rounded text-xs"
+                        >
+                          {seg.value}
+                        </span>
+                      )
+                    )}
+                  </div>
+                </div>
+
+                {/* 2. Dynamic Variables Fill-in Section with Multi-Presets & Enum Option Selectors */}
                 {variableDescriptors.length > 0 && (
                   <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3.5">
                     <div className="flex items-center justify-between gap-2">
@@ -754,42 +821,6 @@ export const PromptDetailWorkbench: React.FC<PromptDetailWorkbenchProps> = ({
                     </div>
                   </div>
                 )}
-
-                {/* Assembled Prompt Reading & Copy Box with Highlighted Variable Tokens */}
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-semibold text-slate-700">
-                      {variables.length > 0
-                        ? '实时合成预览（蓝色下划线为已填变量，琥珀色为待填项）'
-                        : '提示词正文内容'}
-                    </span>
-                    <span className="text-xs text-slate-400 font-mono tabular-nums">
-                      {assembledPrompt.length} 字符
-                    </span>
-                  </div>
-
-                  <div className="p-4 bg-slate-50/70 border border-slate-200 rounded-xl text-[15px] leading-[1.7] text-slate-800 whitespace-pre-wrap break-words font-sans select-all">
-                    {previewSegments.map((seg, idx) =>
-                      seg.type === 'text' ? (
-                        <React.Fragment key={idx}>{seg.value}</React.Fragment>
-                      ) : seg.filled ? (
-                        <span
-                          key={idx}
-                          className="text-blue-700 font-medium underline decoration-blue-300 decoration-dashed underline-offset-4"
-                        >
-                          {seg.value}
-                        </span>
-                      ) : (
-                        <span
-                          key={idx}
-                          className="font-mono text-amber-700 bg-amber-50/80 px-1 rounded-xs"
-                        >
-                          {seg.value}
-                        </span>
-                      )
-                    )}
-                  </div>
-                </div>
               </>
             )}
           </>

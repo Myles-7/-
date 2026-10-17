@@ -17,17 +17,21 @@ import {
   Edit2,
   ArrowUp,
   ArrowDown,
+  GitCommitHorizontal,
 } from 'lucide-react';
-import type { Category, PromptItem } from '../types/prompt';
+import type { Category, LibraryView, PromptItem } from '../types/prompt';
 
 interface SidebarProps {
   prompts: PromptItem[];
   categories: Category[];
+  activeView?: LibraryView;
+  chainsCount?: number;
   activeCategoryId: string | 'all';
   activeSubCategoryId: string | 'all';
   selectedTags: string[];
   allTags: { tag: string; count: number }[];
   onSelectCategory: (categoryId: string | 'all', subCategoryId?: string | 'all') => void;
+  onSelectChainsView?: () => void;
   onToggleTag: (tag: string) => void;
   onClearTags: () => void;
   onAddCategory: (name: string) => void;
@@ -63,11 +67,14 @@ function getCategoryIcon(iconName?: string, isSelected?: boolean) {
 export const Sidebar: React.FC<SidebarProps> = ({
   prompts,
   categories,
+  activeView = 'all',
+  chainsCount = 0,
   activeCategoryId,
   activeSubCategoryId,
   selectedTags,
   allTags,
   onSelectCategory,
+  onSelectChainsView,
   onToggleTag,
   onClearTags,
   onAddCategory,
@@ -184,7 +191,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             type="button"
             onClick={() => onSelectCategory('all', 'all')}
             className={`w-full flex items-center justify-between px-2.5 py-2 mb-1 rounded-xl text-xs font-semibold transition-all whitespace-nowrap ${
-              activeCategoryId === 'all'
+              activeView !== 'chains' && activeCategoryId === 'all'
                 ? 'bg-slate-900 text-white shadow-xs'
                 : 'text-slate-700 hover:bg-slate-100'
             }`}
@@ -192,19 +199,52 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <span className="flex items-center gap-2 truncate">
               <Layers
                 className={`w-4 h-4 shrink-0 ${
-                  activeCategoryId === 'all' ? 'text-blue-300' : 'text-slate-400'
+                  activeView !== 'chains' && activeCategoryId === 'all'
+                    ? 'text-blue-300'
+                    : 'text-slate-400'
                 }`}
               />
               <span>全部分类总览</span>
             </span>
             <span
               className={`font-mono text-xs tabular-nums ${
-                activeCategoryId === 'all' ? 'text-slate-300' : 'text-slate-400'
+                activeView !== 'chains' && activeCategoryId === 'all'
+                  ? 'text-slate-300'
+                  : 'text-slate-400'
               }`}
             >
               {prompts.length}
             </span>
           </button>
+
+          {/* Prompt Chains Visual Workflow Studio Entry */}
+          {onSelectChainsView && (
+            <button
+              type="button"
+              onClick={onSelectChainsView}
+              className={`w-full flex items-center justify-between px-2.5 py-2 mb-2 rounded-xl text-xs font-semibold transition-all whitespace-nowrap ${
+                activeView === 'chains'
+                  ? 'bg-blue-600 text-white shadow-xs'
+                  : 'text-slate-700 bg-slate-50/80 hover:bg-blue-50/70 hover:text-blue-700 border border-slate-200/70'
+              }`}
+            >
+              <span className="flex items-center gap-2 truncate">
+                <GitCommitHorizontal
+                  className={`w-4 h-4 shrink-0 ${
+                    activeView === 'chains' ? 'text-white' : 'text-blue-600'
+                  }`}
+                />
+                <span>场景任务流 · 画布</span>
+              </span>
+              <span
+                className={`font-mono text-xs tabular-nums ${
+                  activeView === 'chains' ? 'text-blue-100' : 'text-slate-500'
+                }`}
+              >
+                {chainsCount}流
+              </span>
+            </button>
+          )}
 
           {isAddingCategory && (
             <form onSubmit={handleCreateCategory} className="mb-2.5 px-1">
